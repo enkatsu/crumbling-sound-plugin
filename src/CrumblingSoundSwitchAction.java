@@ -1,3 +1,4 @@
+import com.codepoetics.protonpack.collectors.CollectorUtils;
 import com.intellij.notification.Notification;
 import com.intellij.notification.NotificationType;
 import com.intellij.notification.Notifications;
@@ -9,13 +10,14 @@ import com.intellij.openapi.vfs.VirtualFileManager;
 import com.intellij.openapi.vfs.newvfs.BulkFileListener;
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent;
 import com.intellij.util.messages.MessageBusConnection;
-import org.apache.commons.codec.binary.Hex;
+import one.util.streamex.StreamEx;
+import org.apache.commons.lang3.StringUtils;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.IOException;
 import java.util.*;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 public class CrumblingSoundSwitchAction extends AnAction {
 
@@ -97,22 +99,13 @@ public class CrumblingSoundSwitchAction extends AnAction {
                     assert checker != null;
                     checker.setAfter(Objects.requireNonNull(this.getFileContent(event)));
                 });
-                System.out.println("*** path ***");
-                this.checkers.stream().map(CrumblingChecker::getPath).forEach(System.out::println);
-                System.out.println("*** before ***");
-                this.checkers.stream().map(CrumblingChecker::getBefore).forEach(System.out::println);
-                System.out.println("*** byte ***");
-                this.checkers.stream().map(checker -> new String(Hex.encodeHex(checker.getBefore()))).forEach(System.out::println);
-                System.out.println("*** after ***");
-                this.checkers.stream().map(CrumblingChecker::getAfter).forEach(System.out::println);
-                System.out.println("*** byte ***");
-                this.checkers.stream().map(checker -> new String(Hex.encodeHex(checker.getAfter()))).forEach(System.out::println);
-                System.out.println("***");
+                int count = checkers.stream().mapToInt(CrumblingChecker::check).sum();
+                if (count <= 0) return;
 
                 Notification notification = new Notification(
                         "crumbling-sound-plugin",
                         "crumbling-sound-plugin",
-                        "このインデントは壊れてますね",
+                        "ぶつかった！",
                         NotificationType.INFORMATION
                 );
                 Notifications.Bus.notify(notification);
@@ -123,13 +116,31 @@ public class CrumblingSoundSwitchAction extends AnAction {
     class CrumblingChecker {
         private String path;
         private byte[] before, after;
+        diff_match_patch dmp = new diff_match_patch();
 
         CrumblingChecker(String path) {
             this.path = path;
         }
 
-        boolean check() {
-            return true;
+        int check() {
+            LinkedList<diff_match_patch.Diff> diff = dmp.diff_main(new String(this.before), new String(this.after));
+            dmp.diff_cleanupSemantic(diff);
+            System.out.println(diff);
+            return (int)StreamEx.ofSubLists(diff, 2, 1)
+                    .filter(this::checkPair).count();
+        }
+
+        boolean checkPair(List<diff_match_patch.Diff> pair) {
+            return checkPair(pair.get(0), pair.get(1));
+        }
+
+        boolean checkPair(diff_match_patch.Diff first, diff_match_patch.Diff second) {
+            Pattern spaceStartPattern = Pattern.compile("[\\s]+.+", Pattern.DOTALL);
+            Pattern spaceEndPattern = Pattern.compile(".+[\\s]+", Pattern.DOTALL);
+
+            return diff_match_patch.Operation.DELETE.equals(first.operation) &&
+                    spaceEndPattern.matcher(first.text).matches() &&
+                    !spaceStartPattern.matcher(second.text).matches();
         }
 
         public String getPath() {
